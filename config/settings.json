@@ -1,0 +1,35 @@
+{
+  "project": {
+    "name": "PersonaOS",
+    "team": "Hack23",
+    "environment": "ST Engineering Windows VM"
+  },
+  "session": {
+    "minimum_duration_seconds": 900,
+    "target_duration_seconds": 960,
+    "scenario": "Weekly Project Progress Report"
+  },
+  "office": {
+    "document_name": "Weekly_Project_Report.docx",
+    "document_title": "Weekly Project Progress Report"
+  },
+  "browser": {
+    "websites": [
+      "https://www.coursera.org",
+      "https://aws.amazon.com",
+      "https://www.samsung.com",
+      "https://www.apple.com",
+      "https://www.dell.com"
+    ],
+    "minimum_links_per_session": 1
+  },
+  "behaviour": {
+    "profile": "office_worker",
+    "enable_typing_corrections": true,
+    "enable_variable_pauses": true
+  },
+  "telemetry": {
+    "output_directory": "outputs/telemetry",
+    "capture_resource_usage": true
+  }
+}
