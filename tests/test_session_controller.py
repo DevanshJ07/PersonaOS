@@ -49,7 +49,7 @@ class SessionControllerTests(unittest.TestCase):
         self.config = {
             "session": {"scenario": "Project report", "minimum_duration_seconds": 900,
                         "target_duration_seconds": 960},
-            "office": {"document_name": "Weekly_Project_Report.docx"},
+            "office": {"document_name": "Weekly_Project_Report.odt"},
             "browser": {"minimum_links_per_session": 1},
             "behaviour": {},
             "telemetry": {"capture_resource_usage": False},
@@ -69,8 +69,8 @@ class SessionControllerTests(unittest.TestCase):
         self.order.append("office")
         context.behaviour.type_text("Report paragraph")
         context.output_dir.mkdir(parents=True)
-        path = context.output_dir / "Weekly_Project_Report.docx"
-        path.write_bytes(b"mock-docx")
+        path = context.output_dir / "Weekly_Project_Report.odt"
+        path.write_bytes(b"mock-odt")
         return TaskResult(True, ["report_saved"], [str(path)])
 
     def _run(self, **kwargs):
@@ -99,7 +99,7 @@ class SessionControllerTests(unittest.TestCase):
         self.assertEqual(events[-1]["kind"], "session_end")
         self.assertTrue(any(e["kind"] == "pause" for e in events))
         self.assertTrue(any(e["kind"] == "typing" for e in events))
-        self.assertTrue(any(p.endswith(".docx") for p in result["artifacts"]))
+        self.assertTrue(any(p.endswith(".odt") for p in result["artifacts"]))
 
     def test_full_repeats_real_tasks_until_target(self):
         def browser(context):

@@ -1,8 +1,9 @@
-"""Visible Word workflow using the frozen SessionContext/TaskResult API.
+"""Visible Apache OpenOffice Writer workflow using SessionContext/TaskResult.
 
-Windows desktop Word is required; no COM document generation, clipboard paste,
-cloud calls or third-party Python dependencies. The input adapter is provided
-by the Behaviour branch. Launch uses visible Win+R -> WINWORD.EXE /w.
+OpenOffice Writer is required. Writer 4.1 can read DOCX but cannot save DOCX;
+this worker therefore saves and verifies an ODT document. It uses visible
+keyboard input through the shared Behaviour engine, not UNO or clipboard paste.
+Launch uses the Windows Run dialog and soffice.exe -writer.
 Actual process ancestry must be measured; no explorer.exe-parentage claim.
 
 From the repository root:
@@ -17,6 +18,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 import ctypes
 from ctypes import wintypes
+import os
 from pathlib import Path, PureWindowsPath
 import re
 import shutil
@@ -76,56 +78,60 @@ def _output_path(directory, filename):
         raise ValueError("document_name must be a filename of at most 120 characters")
     if (PureWindowsPath(filename).name != filename or Path(filename).name != filename or
             re.search(r'[<>:"/\\|?*\x00-\x1f]', filename) or
-            filename.endswith((" ", ".")) or Path(filename).suffix.lower() != ".docx"):
-        raise ValueError("document_name must be a plain .docx filename without folders")
+            filename.endswith((" ", ".")) or Path(filename).suffix.lower() != ".odt"):
+        raise ValueError("document_name must be a plain .odt filename without folders")
     if filename.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL", *[f"COM{i}" for i in range(1, 10)], *[f"LPT{i}" for i in range(1, 10)]}:
         raise ValueError("document_name uses a reserved Windows device name")
     base = Path(directory).expanduser().resolve()
     base.mkdir(parents=True, exist_ok=True)
     stem = Path(filename).stem
     for index in range(1, 10001):
-        candidate = base / (filename if index == 1 else f"{stem}_{index:03d}.docx")
+        candidate = base / (filename if index == 1 else f"{stem}_{index:03d}.odt")
         # lexists behaviour: a broken symlink also counts as occupied.
         if not candidate.exists() and not candidate.is_symlink():
             if len(str(candidate)) > 220:
-                raise ValueError("Use a shorter output directory (Word Save As compatibility)")
+                raise ValueError("Use a shorter output directory (Writer Save As compatibility)")
             return candidate
     raise FileExistsError("Too many existing reports; choose a new session output directory")
 
 
-def find_word():
+def find_writer():
     """Read-only discovery; no installation, registry modification or downloads."""
     if sys.platform != "win32":
-        raise RuntimeError("Office GUI execution requires the assigned Windows VM with desktop Microsoft Word")
+        raise RuntimeError("Office GUI execution requires the assigned Windows VM with Apache OpenOffice Writer")
     import winreg
     candidates = []
     for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
         for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
             try:
-                with winreg.OpenKey(hive, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\WINWORD.EXE", 0,
+                with winreg.OpenKey(hive, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\soffice.exe", 0,
                                     winreg.KEY_READ | view) as key:
                     candidates.append(winreg.QueryValueEx(key, None)[0].strip('"'))
             except OSError:
                 pass
-    found = shutil.which("WINWORD.EXE")
+    found = shutil.which("soffice.exe")
     if found:
         candidates.append(found)
+    for variable in ("ProgramFiles", "ProgramFiles(x86)"):
+        base = os.environ.get(variable)
+        if base:
+            candidates.append(str(Path(base) / "OpenOffice 4" / "program" / "soffice.exe"))
     for candidate in candidates:
         path = Path(candidate)
-        if path.is_file() and path.name.lower() == "winword.exe":
+        if path.is_file() and path.name.lower() == "soffice.exe":
             return str(path.resolve())
-    raise RuntimeError("Desktop Microsoft Word was not found. Ask the VM owner to verify its installation/licence; no editor fallback was selected.")
+    raise RuntimeError("Apache OpenOffice Writer (soffice.exe) was not found; ask the VM owner to check its installation.")
 
 
-class WindowsWordDesktop:
-    """Bounded native desktop operations; only the launched Word PID is owned.
+class WindowsWriterDesktop:
+    """Bounded native desktop operations; only the new Writer window is owned.
 
-    Supports desktop Word's OpusApp/_WwG editor and the native F12 Save As dialog.
-    The dialog's filename field is found by control IDs, not screen coordinates.
-    Unexpected activation/licensing dialogs stop the workflow for operator review.
+    Requires Writer's Windows-native Save As dialog (disable 'Use OpenOffice
+    dialogs' in Tools > Options > OpenOffice > General if needed). A first-run,
+    recovery or unexpected dialog stops input for operator inspection.
     """
     def __init__(self, behaviour):
-        executable = find_word()
+        executable = find_writer()
         from behaviour.typing import WindowsKeyboard
         self.executable, self.behaviour = executable, behaviour
         self.keyboard = WindowsKeyboard()
@@ -146,6 +152,7 @@ class WindowsWordDesktop:
             "EnumChildWindows": ([wintypes.HWND, self.enum_callback, wintypes.LPARAM], wintypes.BOOL),
             "GetWindowThreadProcessId": ([wintypes.HWND, ctypes.POINTER(wintypes.DWORD)], wintypes.DWORD),
             "GetClassNameW": ([wintypes.HWND, wintypes.LPWSTR, ctypes.c_int], ctypes.c_int),
+            "GetWindowTextW": ([wintypes.HWND, wintypes.LPWSTR, ctypes.c_int], ctypes.c_int),
             "GetForegroundWindow": ([], wintypes.HWND),
             "GetShellWindow": ([], wintypes.HWND),
             "IsWindow": ([wintypes.HWND], wintypes.BOOL),
@@ -197,6 +204,19 @@ class WindowsWordDesktop:
         self.user32.GetClassNameW(hwnd, buffer, len(buffer))
         return buffer.value
 
+    def _title(self, hwnd):
+        buffer = ctypes.create_unicode_buffer(512)
+        self.user32.GetWindowTextW(hwnd, buffer, len(buffer))
+        return buffer.value
+
+    def _writer_window(self, hwnd):
+        image = self._image(self._pid(hwnd))
+        return (self._class(hwnd) == "SALFRAME"
+                and "OpenOffice Writer" in self._title(hwnd)
+                and image is not None
+                and image.parent == Path(self.executable).resolve().parent
+                and image.name.lower() in {"soffice.bin", "soffice.exe"})
+
     def _pid(self, hwnd):
         pid = wintypes.DWORD()
         self.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
@@ -242,16 +262,17 @@ class WindowsWordDesktop:
     def _owned_foreground(self):
         front = self.user32.GetForegroundWindow()
         if not self.process or not front or self._pid(front) != self.process.pid:
-            raise RuntimeError("Word lost focus; input stopped before typing into another application")
+            raise RuntimeError("Writer lost focus; input stopped before typing into another application")
         return front
 
     def assert_editor(self):
         self.check_cancel()
         if self._owned_foreground() != self.hwnd:
-            raise RuntimeError("A Word dialog is covering the editor; dismiss it manually and retry")
+            raise RuntimeError("A Writer dialog is covering the editor; dismiss it manually and retry")
         focus = self._focus()
-        if not focus or self._class(focus) != "_WwG":
-            raise RuntimeError("Word document body is not focused; input stopped")
+        if (not focus or self.user32.GetAncestor(focus, 2) != self.hwnd
+                or not self._class(focus).startswith("SAL")):
+            raise RuntimeError("Writer document body is not focused; input stopped")
 
     def assert_filename(self):
         self.check_cancel()
@@ -261,7 +282,6 @@ class WindowsWordDesktop:
     def open(self):
         self.check_cancel()
         previous = set(self._windows())
-        previous_word_pids = {self._pid(h) for h in previous if self._class(h) == "OpusApp"}
         shell = self.user32.GetShellWindow()
         if not shell:
             raise RuntimeError("Windows Explorer desktop is unavailable; Run-dialog launch cannot proceed")
@@ -285,25 +305,24 @@ class WindowsWordDesktop:
         self.keyboard.hotkey("ctrl", "a")
         guard = getattr(self.behaviour, "input_guard", None)
         with guard(launcher_focus) if guard else nullcontext():
-            self.behaviour.type_text(f'"{self.executable}" /w')
+            self.behaviour.type_text(f'"{self.executable}" -writer')
             launcher_focus()
         self.keyboard.press("enter")
         self.keyboard.focus_guard = None
         def window():
             matches = [h for h in self._windows() if h not in previous
-                       and self._class(h) == "OpusApp" and self.user32.IsWindowVisible(h)
-                       and self._pid(h) not in previous_word_pids
-                       and self._image(self._pid(h)) == Path(self.executable).resolve()]
+                       and self.user32.IsWindowVisible(h) and self._writer_window(h)]
             if len(matches) > 1:
-                raise RuntimeError("Multiple new Word windows appeared; ownership is ambiguous")
+                raise RuntimeError("Multiple new Writer windows appeared; ownership is ambiguous")
             return matches[0] if matches else None
-        self.hwnd = self._wait(window, "Word editor did not open. Check first-run/licence prompts.", 30)
+        self.hwnd = self._wait(window, "Writer editor did not open. Check first-run or recovery prompts.", 30)
         self.process = SimpleNamespace(pid=self._pid(self.hwnd))
         self.user32.ShowWindow(self.hwnd, 9)
         self.user32.SetForegroundWindow(self.hwnd)
         self._wait(lambda: self.user32.GetForegroundWindow() == self.hwnd,
-                   "Windows did not activate the new Word window. Activate it and rerun.")
-        self._wait(lambda: self._class(self._focus()) == "_WwG", "Word opened without document-body focus; check first-run dialogs.")
+                   "Windows did not activate the new Writer window. Activate it and rerun.")
+        self._wait(lambda: self.user32.GetAncestor(self._focus(), 2) == self.hwnd,
+                   "Writer opened without document-body focus; check first-run dialogs.")
         self.assert_editor()
 
     def hotkey(self, *keys):
@@ -314,18 +333,18 @@ class WindowsWordDesktop:
     def save_as(self, path):
         if path.exists() or path.is_symlink():
             raise FileExistsError("Output appeared during the run; refusing to overwrite")
-        self.hotkey("f12")
+        self.hotkey("ctrl", "s")  # First save of an untitled Writer document opens Save As.
         self.keyboard.focus_guard = None
         def dialog():
             return next((h for h in self._windows() if self._pid(h) == self.process.pid
                          and self._class(h) == "#32770" and self.user32.IsWindowVisible(h)), None)
-        self.dialog = self._wait(dialog, "Native Save As dialog did not appear. Check Word's first-run/save settings.")
+        self.dialog = self._wait(dialog, "Native Save As did not appear. Disable 'Use OpenOffice dialogs' in Writer options.")
         self._wait(lambda: self.user32.GetForegroundWindow() == self.dialog,
                    "Save As did not receive focus")
         def filename_edit():
             edits = [h for h in self._windows(self.dialog) if self._class(h) == "Edit"
                      and self.user32.IsWindowVisible(h) and self.user32.IsWindowEnabled(h)
-                     and self.user32.GetDlgCtrlID(h) in (1001, 1152)]
+                     and self.user32.GetDlgCtrlID(h) in (1001, 1152, 1148)]
             return edits[0] if len(edits) == 1 else None
         self.filename_control = self._wait(filename_edit,
             "Unsupported Save As layout: could not identify exactly one filename edit control")
@@ -349,7 +368,7 @@ class WindowsWordDesktop:
         self._wait(lambda: not self.user32.IsWindow(self.dialog),
                    "Save As did not finish. Check overwrite/format/permission dialogs manually.", 30)
         self._wait(lambda: self.user32.GetForegroundWindow() == self.hwnd,
-                   "Word did not return from Save As")
+                   "Writer did not return from Save As")
         self.assert_editor()
 
     def _wrong_dialog(self):
@@ -360,7 +379,7 @@ class WindowsWordDesktop:
         def verified():
             self.assert_editor()
             try:
-                _verify_docx(path, expected)
+                _verify_odt(path, expected)
                 return True
             except (OSError, ValueError, zipfile.BadZipFile, ET.ParseError) as exc:
                 last_error[0] = str(exc)
@@ -374,14 +393,14 @@ class WindowsWordDesktop:
         self.hotkey("alt", "f4")
         self.keyboard.focus_guard = None
         self._wait(lambda: not self.user32.IsWindow(self.hwnd),
-                   "Owned Word window did not close; check its prompt manually", 15)
+                   "Owned Writer window did not close; check its prompt manually", 15)
 
     def recovery_note(self):
         if self.process is not None:
-            return (f"Input stopped. Inspect only the Word instance launched for this run "
+            return (f"Input stopped. Inspect only the Writer window launched for this run "
                     f"(PID {self.process.pid}); an unsaved document or dialog may remain. "
                     "No unrelated windows were closed and no process was killed.")
-        return ("No Word window was adopted. Inspect the Run dialog or any newly opened Word window; "
+        return ("No Writer window was adopted. Inspect the Run dialog or any newly opened Writer window; "
                 "a launch may still be pending. No process was killed.")
 
 
@@ -391,19 +410,25 @@ def _normalise(text):
     return " ".join(text.split())
 
 
-def _verify_docx(path, expected):
+def _verify_odt(path, expected):
     if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
         raise ValueError("Expected a nonempty regular report file")
     with zipfile.ZipFile(path) as archive:
-        entry = archive.getinfo("word/document.xml")
+        if archive.read("mimetype") != b"application/vnd.oasis.opendocument.text":
+            raise ValueError("Saved file is not an ODT document")
+        entry = archive.getinfo("content.xml")
         if entry.file_size > 5_000_000:
             raise ValueError("Unexpectedly large report XML")
         root = ET.fromstring(archive.read(entry))
-    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
-    paragraphs = ["".join(t.text or "" for t in p.findall(".//w:t", ns))
-                  for p in root.findall(".//w:body/w:p", ns)]
+    ns = {"office": "urn:oasis:names:tc:opendocument:xmlns:office:1.0",
+          "text": "urn:oasis:names:tc:opendocument:xmlns:text:1.0"}
+    body = root.find(".//office:body/office:text", ns)
+    if body is None:
+        raise ValueError("Saved ODT has no text body")
+    paragraphs = ["".join(p.itertext()) for p in body.iter()
+                  if p.tag in (f"{{{ns['text']}}}p", f"{{{ns['text']}}}h")]
     if _normalise("\n".join(paragraphs)) != _normalise(expected):
-        raise ValueError("Saved Word content does not match the intended report; check AutoCorrect/focus")
+        raise ValueError("Saved Writer content does not match the intended report; check AutoCorrect/focus")
 
 
 def run(context: SessionContext) -> TaskResult:
@@ -412,9 +437,9 @@ def run(context: SessionContext) -> TaskResult:
     desktop = None
     try:
         office, title, paragraphs = _report(context.config)
-        path = _output_path(context.output_dir, office.get("document_name", "Weekly_Project_Report.docx"))
+        path = _output_path(context.output_dir, office.get("document_name", "Weekly_Project_Report.odt"))
         behaviour = context.behaviour
-        desktop = WindowsWordDesktop(behaviour)
+        desktop = WindowsWriterDesktop(behaviour)
         desktop.open()
         actions.append("office_opened")
         behaviour.pause(action="navigate")
@@ -468,16 +493,16 @@ def _main():
 
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--check", action="store_true", help="Read-only Word/Python preflight")
-    mode.add_argument("--smoke", action="store_true", help="Run real Word GUI task inside authorized VM")
+    mode.add_argument("--check", action="store_true", help="Read-only Writer/Python preflight")
+    mode.add_argument("--smoke", action="store_true", help="Run real Writer GUI task inside authorized VM")
     parser.add_argument("--config", type=Path, default=Path("config/settings.json"))
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     if args.check:
         try:
             print(json.dumps({"python": sys.version.split()[0], "platform": sys.platform,
-                              "word_executable": find_word(),
-                              "note": "Installation discovery only; licence and GUI are not yet verified"}, indent=2))
+                              "writer_executable": find_writer(),
+                              "note": "Installation discovery only; GUI is not yet verified"}, indent=2))
             return 0
         except Exception as exc:
             print(f"Preflight blocked: {exc}")
@@ -499,7 +524,7 @@ def _main():
         behaviour = BehaviourEngine.from_config(config.get("behaviour", {}), event_sink=sink)
         result = run(SessionContext(config=config, output_dir=output, behaviour=behaviour))
         report = {"result": asdict(result), "timing": behaviour.timing_summary(),
-                  "launch_method": "visible Windows Run dialog: WINWORD.EXE /w; measure actual process ancestry",
+                  "launch_method": "visible Windows Run dialog: soffice.exe -writer; measure actual process ancestry",
                   "validation": "Office-only smoke; not the 900-second integrated demonstration"}
     with (output / f"office_result_{stamp}.json").open("x", encoding="utf-8") as stream:
         json.dump(report, stream, indent=2)
