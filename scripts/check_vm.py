@@ -37,11 +37,7 @@ BROWSERS = {
     "Chrome": ("chrome.exe", [r"Google\Chrome\Application\chrome.exe"]),
     "Firefox": ("firefox.exe", [r"Mozilla Firefox\firefox.exe"]),
 }
-WORD_RELATIVE = [
-    r"Microsoft Office\root\Office16\WINWORD.EXE",
-    r"Microsoft Office\Office16\WINWORD.EXE",
-    r"Microsoft Office\root\Office15\WINWORD.EXE",
-]
+WRITER_RELATIVE = [r"OpenOffice 4\program\soffice.exe"]
 
 
 class Checklist:
@@ -151,8 +147,7 @@ def check_packages(c):
     for module, dist, label, required in (
             ("pyautogui", "PyAutoGUI", "pyautogui", True),
             ("pygetwindow", "PyGetWindow", "pygetwindow", True),
-            ("psutil", "psutil", "psutil (resource sampling)", False),
-            ("docx", "python-docx", "python-docx (output verification)", False)):
+            ("psutil", "psutil", "psutil (resource sampling)", False)):
         spec = importlib.util.find_spec(module)
         if spec is None:
             c.report("FAIL", label, "not installed", required=required)
@@ -190,9 +185,10 @@ def check_browsers(c):
         print("       note: the browser module launches chrome or msedge only")
 
 
-def check_word(c):
-    path = find_executable("WINWORD.EXE", WORD_RELATIVE)
-    c.report("OK" if path else "FAIL", "Microsoft Word", describe(path) if path else "WINWORD.EXE not found")
+def check_writer(c):
+    path = find_executable("soffice.exe", WRITER_RELATIVE)
+    c.report("OK" if path else "FAIL", "Apache OpenOffice Writer",
+             describe(path) if path else "soffice.exe not found")
 
 
 def check_sysmon(c):
@@ -284,7 +280,7 @@ def main(argv=None):
     check_packages(c)
     check_screen(c)
     check_browsers(c)
-    check_word(c)
+    check_writer(c)
     check_sysmon(c)
     config = load_config(args.config, c)
     out = check_output_writable(c, config)
