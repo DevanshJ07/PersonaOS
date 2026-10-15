@@ -55,6 +55,7 @@ DEFAULTS = {
 
 POLL_SECONDS = 0.25
 SETTLE_SECONDS = 1.0
+FOCUS_ATTEMPTS = 8
 MIN_SITES = 2
 MAX_SCROLL_ABS = 1200
 
@@ -315,15 +316,41 @@ class _Session:
                 return value
             self.clock.sleep(POLL_SECONDS)
 
-    def ensure_focus(self):
-        """Bring our window to the front; raise if it has gone."""
+    def owned_foreground(self):
+        """True only when the window we launched is the verified foreground window."""
+        return (
+            self.handle is not None
+            and self.windows.exists(self.handle)
+            and self.windows.active() == self.handle
+        )
+
+    def focus_diagnostic(self):
+        try:
+            active = self.windows.active()
+        except Exception as exc:
+            active = f"{type(exc).__name__}"
+        exists = self.windows.exists(self.handle) if self.handle is not None else False
+        return f"owned={self.handle} active={active} exists={exists}"
+
+    def ensure_focus(self, attempts=FOCUS_ATTEMPTS):
+        """Recover foreground onto our window only. Never reports success unverified."""
         if not self.windows.exists(self.handle):
             raise BrowserWindowLost()
-        for _ in range(3):
-            if self.windows.active() == self.handle or self.windows.activate(self.handle):
+        for _ in range(max(1, int(attempts))):
+            if self.owned_foreground():
+                return True
+            self.windows.activate(self.handle)
+            if self.owned_foreground():
                 return True
             self.clock.sleep(POLL_SECONDS)
         return False
+
+    def send_owned_hotkey(self, *keys):
+        """Send a shortcut only while our owned window is in front."""
+        if not self.owned_foreground():
+            return False
+        self.gui.hotkey(*keys)
+        return True
 
     def current_title(self):
         title = self.windows.title(self.handle)
@@ -411,11 +438,12 @@ class _Session:
         self.visits.append(record)
 
         if not self.ensure_focus():
-            return self.fail_visit(record, "focus_lost", url)
+            return self.fail_visit(record, "focus_lost", url, self.focus_diagnostic())
 
         self.behaviour.pause("navigate")
         old_title = self.current_title()
-        self.gui.hotkey("ctrl", "l")
+        if not self.send_owned_hotkey("ctrl", "l"):
+            return self.fail_visit(record, "focus_lost", url, self.focus_diagnostic())
         self.behaviour.type_text(url)
         self.gui.press("delete")  # drop any inline autocomplete suffix
         self.gui.press("enter")
@@ -432,9 +460,10 @@ class _Session:
         self.actions.append(f"visited:{url}")
         return True
 
-    def fail_visit(self, record, reason, url):
+    def fail_visit(self, record, reason, url, detail=None):
         record["status"] = reason
-        self.errors.append(f"{reason}:{url}")
+        extra = f":{detail}" if detail else ""
+        self.errors.append(f"{reason}:{url}{extra}")
         return False
 
     def read_page(self, label, record=None):
@@ -479,7 +508,7 @@ class _Session:
 
     def try_link_text(self, site, text):
         if not self.ensure_focus():
-            self.record_link(site, text, "failed", "focus_lost")
+            self.record_link(site, text, "failed", f"focus_lost:{self.focus_diagnostic()}")
             return False
 
         old_title = self.current_title()
@@ -519,7 +548,8 @@ class _Session:
     def go_back(self, site, current):
         if not self.ensure_focus():
             return
-        self.gui.hotkey("alt", "left")
+        if not self.send_owned_hotkey("alt", "left"):
+            return
         if self.wait_for_title_change(current, float(self.cfg["link_load_timeout_seconds"])):
             self.actions.append(f"navigated_back:{site}")
         else:
@@ -528,24 +558,28 @@ class _Session:
     # -- close -------------------------------------------------------------
 
     def close(self):
-        """Close only our window: Ctrl+Shift+W, then Alt+F4 as fallback."""
+        """Close only our window: Ctrl+Shift+W, then Alt+F4 as fallback.
+
+        Transient activation failures are retried. Shortcuts are never sent unless
+        the owned browser window is the verified foreground window.
+        """
         if self.handle is None:
             return
         timeout = float(self.cfg["close_timeout_seconds"])
         for keys in (("ctrl", "shift", "w"), ("alt", "f4")):
             if not self.windows.exists(self.handle):
                 break
-            # Never send close keys unless our own window is in front.
-            if not self.windows.activate(self.handle):
+            if not self.ensure_focus():
                 continue
-            self.gui.hotkey(*keys)
+            if not self.send_owned_hotkey(*keys):
+                continue
             self.wait_for(lambda: not self.windows.exists(self.handle), timeout)
 
-        if self.windows.exists(self.handle):
-            self.errors.append("browser_close_failed")
-        else:
+        if not self.windows.exists(self.handle):
             self.closed = True
             self.actions.append("browser_closed")
+        else:
+            self.errors.append(f"browser_close_failed:{self.focus_diagnostic()}")
 
     # -- results -----------------------------------------------------------
 

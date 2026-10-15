@@ -215,6 +215,11 @@ class BehaviourTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             BehaviourEngine(event_limit=0)
 
+    def test_keyboard_map_includes_writer_close_keys(self):
+        self.assertEqual(WindowsKeyboard.KEYS["f4"], 0x73)
+        self.assertEqual(WindowsKeyboard.KEYS["alt"], 0x12)
+        self.assertEqual(WindowsKeyboard.KEYS["f12"], 0x7B)
+
     @unittest.skipIf(sys.platform == "win32", "Non-Windows error path")
     def test_live_input_rejects_non_windows(self):
         with self.assertRaisesRegex(RuntimeError, "Windows VM"):
