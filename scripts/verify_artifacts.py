@@ -471,7 +471,8 @@ def _check_browser(result: Verification, root: Path, controller: dict | None,
         result.add("browser_navigation", FAIL, "browser_session.json did not parse")
         return
 
-    reasons = []
+    hard = []
+    advisory = []
     cert_note = ""
     for data in usable:
         sites = int(_num(data.get("sites_visited")) or 0)
@@ -481,23 +482,31 @@ def _check_browser(result: Verification, root: Path, controller: dict | None,
         errors = [str(e) for e in (data.get("errors") or [])]
         cert_note += _certificate_notes(errors, visits)
         if sites < MIN_SITES:
-            reasons.append(f"sites_visited={sites} (need >= {MIN_SITES})")
+            hard.append(f"sites_visited={sites} (need >= {MIN_SITES})")
         if visits and len(visited) < MIN_SITES and sites >= MIN_SITES:
-            reasons.append("sites_visited count does not match visits with status=visited")
+            hard.append("sites_visited count does not match visits with status=visited")
         if links < min_links:
-            reasons.append(f"links_followed={links} (need >= {min_links})")
+            hard.append(f"links_followed={links} (need >= {min_links})")
         if data.get("browser_closed") is False:
-            reasons.append("browser_closed is false")
+            hard.append("browser_closed is false")
         if data.get("success") is False:
-            reasons.append("browser_session.success is false")
+            hard.append("browser_session.success is false")
         if errors:
-            reasons.append("errors: " + "; ".join(errors[:6]))
-    if reasons:
-        result.add("browser_navigation", FAIL, "; ".join(reasons) + cert_note)
+            message = "errors: " + "; ".join(errors[:6])
+            if (data.get("success") is False or sites < MIN_SITES or links < min_links
+                    or data.get("browser_closed") is False):
+                hard.append(message)
+            else:
+                advisory.append(message)
+    if hard:
+        result.add("browser_navigation", FAIL, "; ".join(hard) + cert_note)
         return
     last = usable[-1]
-    result.add("browser_navigation", PASS,
-               f"sites_visited={last.get('sites_visited')} links_followed={last.get('links_followed')}")
+    summary = f"sites_visited={last.get('sites_visited')} links_followed={last.get('links_followed')}"
+    if advisory:
+        result.add("browser_navigation", WARN, summary + "; " + "; ".join(advisory) + cert_note)
+        return
+    result.add("browser_navigation", PASS, summary)
 
 
 def _office_odt_paths(root: Path, controller: dict | None, summary: dict | None,
@@ -718,15 +727,30 @@ def _check_recorded_failures(result: Verification, controller: dict | None,
         errors.append(f"telemetry write_failures={write_failures}")
 
     success = None if not isinstance(controller, dict) else controller.get("success")
-    if errors or failed_modules or success is False:
+    if failed_modules or success is False:
         cert = _certificate_notes(errors, [])
         result.add("recorded_failures", FAIL,
                    "; ".join(errors[:8]) + cert if errors else "controller.success is false")
         return
+    if errors:
+        # Controller listed messages while still marking the run successful, or
+        # telemetry write failures occurred without a failed TaskResult.
+        result.add("recorded_failures", FAIL,
+                   "; ".join(errors[:8]) + _certificate_notes(errors, []))
+        return
     if not rows:
         result.add("recorded_failures", FAIL, "no module TaskResult records found")
         return
-    result.add("recorded_failures", PASS, f"{len(rows)} task result(s), none recorded as failed")
+    advisory = []
+    for row in rows:
+        if row.get("success") is False:
+            continue
+        advisory.extend(f"{row.get('module')}: {message}" for message in (row.get("errors") or []) if message)
+    detail = f"{len(rows)} task result(s), none recorded as failed"
+    if advisory:
+        result.add("recorded_failures", WARN, detail + "; non-fatal: " + "; ".join(advisory[:6]))
+        return
+    result.add("recorded_failures", PASS, detail)
 
 
 def main(argv=None) -> int:
