@@ -1,0 +1,10 @@
+# PersonaOS runtime dependencies (Windows VM). Everything else, including the
+# OpenOffice Writer .odt check, is the Python standard library.
+# Installed offline on VM 3231 with Python 3.12.10; the wheel bundle supports Python up to 3.13.
+pyautogui==0.9.54
+pygetwindow==0.0.9
+# Optional: CPU/RAM sampling in telemetry. Sessions still run without it.
+psutil==7.2.2
+
+# dev only: tests/test_web_browser.py uses pytest (run with: python -m pytest tests)
+# pytest
