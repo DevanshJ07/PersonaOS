@@ -86,7 +86,7 @@ class WindowsKeyboard:
     KEYS = {"backspace": 0x08, "tab": 0x09, "enter": 0x0D, "shift": 0x10,
             "ctrl": 0x11, "alt": 0x12, "escape": 0x1B, "home": 0x24,
             "end": 0x23, "left": 0x25, "right": 0x27, "delete": 0x2E,
-            "f12": 0x7B, "win": 0x5B}
+            "f4": 0x73, "f12": 0x7B, "win": 0x5B}
 
     def __init__(self, *, focus_guard=None):
         if sys.platform != "win32":

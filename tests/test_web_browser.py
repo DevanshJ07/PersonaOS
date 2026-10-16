@@ -15,7 +15,7 @@ import pytest
 
 from core.interfaces import SessionContext, TaskResult
 from modules import web_browser
-from modules.web_browser import _run_workflow, _validate_url, run
+from modules.web_browser import FOCUS_ATTEMPTS, _Session, _run_workflow, _validate_url, run
 
 SITES = [
     "https://www.coursera.org",
@@ -67,13 +67,14 @@ class FakeDesktop:
     """Windows + one browser, driven by the keys the workflow sends."""
 
     def __init__(self, installed=("chrome",), page_titles=None, page_links=None,
-                 refuse_close=False):
+                 refuse_close=False, steal_focus_after_launch=False):
         self.windows = {OTHER_WINDOW: "Notes.txt - Notepad"}
         self.active_handle = OTHER_WINDOW
         self.installed = set(installed)
         self.page_titles = dict(PAGE_TITLES if page_titles is None else page_titles)
         self.page_links = dict(PAGE_LINKS if page_links is None else page_links)
         self.refuse_close = refuse_close
+        self.steal_focus_after_launch = steal_focus_after_launch
         self.next_handle = 100
         self.browser_handle = None
         self.browser_suffix = ""
@@ -139,6 +140,8 @@ class FakeDesktop:
                     " - Google Chrome" if command == "chrome" else " - Microsoft​ Edge"
                 )
                 self.browser_handle = self._new_window("New Tab" + self.browser_suffix)
+                if self.steal_focus_after_launch:
+                    self.active_handle = OTHER_WINDOW
             else:
                 self._new_window(command)  # Windows "cannot find" message box
             self.mode = None
@@ -236,11 +239,11 @@ def make_config(websites=None, **browser_extra):
     return {"browser": browser}
 
 
-def run_fake(tmp_path, desktop=None, config=None, seed=1, fail_on=None):
+def run_fake(tmp_path, desktop=None, config=None, seed=1, fail_on=None, windows_cls=FakeWindows):
     desktop = desktop or FakeDesktop()
     behaviour = FakeBehaviour(desktop)
     gui = FakeGui(desktop, fail_on=fail_on)
-    windows = FakeWindows(desktop)
+    windows = windows_cls(desktop)
     context = SessionContext(
         config=config or make_config(),
         output_dir=tmp_path / "out",
@@ -534,7 +537,7 @@ def test_close_failure_means_no_success(tmp_path):
     desktop = FakeDesktop(refuse_close=True)
     result, desktop, _, gui, _ = run_fake(tmp_path, desktop=desktop)
     assert not result.success
-    assert "browser_close_failed" in result.errors
+    assert any(e.startswith("browser_close_failed") for e in result.errors)
     keys = [c[1] for c in gui.calls]
     assert ("ctrl", "shift", "w") in keys and ("alt", "f4") in keys
 
@@ -582,3 +585,133 @@ def test_session_report_written_and_listed(tmp_path):
     assert all(v["url"] in SITES for v in report["visits"])
     assert "started_at" in report and "finished_at" in report
     assert report["errors"] == result.errors
+
+
+# ---------------------------------------------------------------------------
+# Focus recovery and owned-window close
+# ---------------------------------------------------------------------------
+
+class RetryActivateWindows(FakeWindows):
+    """First N activate() calls fail; later calls give our window focus."""
+
+    def __init__(self, desktop, fail_first=3):
+        super().__init__(desktop)
+        self.fail_first = fail_first
+        self.activate_calls = 0
+
+    def activate(self, handle):
+        self.activated.append(handle)
+        self.activate_calls += 1
+        if handle not in self.desktop.windows:
+            return False
+        if self.activate_calls <= self.fail_first:
+            return False
+        self.desktop.active_handle = handle
+        return True
+
+
+class NeverActivateWindows(FakeWindows):
+    def activate(self, handle):
+        self.activated.append(handle)
+        return False
+
+
+class LyingActivateWindows(FakeWindows):
+    """Claims activate succeeded but leaves a foreign window in front."""
+
+    def activate(self, handle):
+        self.activated.append(handle)
+        return True
+
+
+def _owned_session(tmp_path, windows_cls=FakeWindows, active=None):
+    desktop = FakeDesktop()
+    desktop.browser_handle = 100
+    desktop.windows[100] = "Apple - Google Chrome"
+    desktop.active_handle = OTHER_WINDOW if active is None else active
+    gui = FakeGui(desktop)
+    windows = windows_cls(desktop)
+    context = SessionContext(make_config(), tmp_path / "out", FakeBehaviour(desktop))
+    session = _Session(context, gui, windows, FakeClock(), random.Random(1))
+    session.handle = 100
+    session.browser = "chrome"
+    return session, desktop, gui, windows
+
+
+def test_ensure_focus_retries_then_succeeds(tmp_path):
+    session, desktop, _, windows = _owned_session(tmp_path, RetryActivateWindows)
+    assert desktop.active_handle == OTHER_WINDOW
+    assert session.ensure_focus() is True
+    assert desktop.active_handle == 100
+    assert windows.activate_calls == 4
+    assert session.owned_foreground()
+
+
+def test_ensure_focus_fails_after_bounded_retries(tmp_path):
+    session, desktop, _, windows = _owned_session(tmp_path, NeverActivateWindows)
+    assert session.ensure_focus() is False
+    assert desktop.active_handle == OTHER_WINDOW
+    assert len(windows.activated) == FOCUS_ATTEMPTS
+    assert "owned=100" in session.focus_diagnostic()
+    assert "active=1" in session.focus_diagnostic()
+
+
+def test_close_retries_transient_activation_then_closes(tmp_path):
+    session, desktop, gui, _ = _owned_session(tmp_path, RetryActivateWindows)
+    session.close()
+    assert session.closed
+    assert 100 not in desktop.windows
+    assert OTHER_WINDOW in desktop.windows
+    close_keys = [c for c in gui.calls if c[1] in (("ctrl", "shift", "w"), ("alt", "f4"))]
+    assert close_keys
+    assert all(c[2] == 100 for c in close_keys)
+
+
+def test_close_does_not_send_shortcuts_to_foreign_window(tmp_path):
+    session, desktop, gui, _ = _owned_session(tmp_path, NeverActivateWindows)
+    session.close()
+    assert not session.closed
+    assert 100 in desktop.windows
+    assert OTHER_WINDOW in desktop.windows
+    assert desktop.active_handle == OTHER_WINDOW
+    close_keys = [c for c in gui.calls if c[1] in (("ctrl", "shift", "w"), ("alt", "f4"))]
+    assert close_keys == []
+    assert any(e.startswith("browser_close_failed") and "owned=100" in e for e in session.errors)
+
+
+def test_close_rejects_unverified_activate_success(tmp_path):
+    session, desktop, gui, _ = _owned_session(tmp_path, LyingActivateWindows)
+    session.close()
+    assert desktop.active_handle == OTHER_WINDOW
+    close_keys = [c for c in gui.calls if c[1] in (("ctrl", "shift", "w"), ("alt", "f4"))]
+    assert close_keys == []
+    assert any(e.startswith("browser_close_failed") for e in session.errors)
+
+
+def test_close_treats_disappeared_window_as_closed(tmp_path):
+    session, desktop, gui, _ = _owned_session(tmp_path, active=100)
+    desktop.windows.pop(100)
+    session.close()
+    assert session.closed
+    assert "browser_closed" in session.actions
+    assert not any(e.startswith("browser_close_failed") for e in session.errors)
+    assert not any(c[1] in (("ctrl", "shift", "w"), ("alt", "f4")) for c in gui.calls)
+
+
+def test_visit_focus_lost_includes_diagnostic(tmp_path):
+    desktop = FakeDesktop(steal_focus_after_launch=True)
+    result, desktop, _, gui, windows = run_fake(
+        tmp_path, desktop=desktop, windows_cls=NeverActivateWindows,
+    )
+    assert not result.success
+    focus_errors = [e for e in result.errors if e.startswith("focus_lost:")]
+    assert focus_errors
+    assert "owned=" in focus_errors[0]
+    assert "active=1" in focus_errors[0]
+    close_while_foreign = [
+        c for c in gui.calls
+        if c[1] in (("ctrl", "shift", "w"), ("alt", "f4")) and c[2] == OTHER_WINDOW
+    ]
+    assert close_while_foreign == []
+    assert OTHER_WINDOW in desktop.windows
+
