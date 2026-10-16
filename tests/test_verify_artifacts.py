@@ -303,6 +303,22 @@ class VerifyArtifactsTests(unittest.TestCase):
         self.assertIn("900s not required", by_name(result, "timestamps_and_duration").reason)
         self.assertEqual(by_name(result, "odt_document").status, verify.PASS)
         self.assertEqual(by_name(result, "browser_navigation").status, verify.PASS)
+        self.assertEqual(by_name(result, "recorded_failures").status, verify.PASS)
+        self.assertIn("none recorded as failed", by_name(result, "recorded_failures").reason)
+
+    def test_successful_smoke_with_nonfatal_browser_errors_does_not_fail(self):
+        session = build_session(
+            self.root, mode="smoke", duration=45.0, success=True, browser_success=True,
+            browser_errors=["back_navigation_timeout:apple.com",
+                            "browser_launch_timeout:chrome"],
+        )
+        result = self.verify(session)
+        self.assertFalse(result.failed, result.report())
+        self.assertEqual(by_name(result, "browser_navigation").status, verify.WARN)
+        self.assertIn("back_navigation_timeout", by_name(result, "browser_navigation").reason)
+        self.assertEqual(by_name(result, "recorded_failures").status, verify.WARN)
+        self.assertIn("none recorded as failed", by_name(result, "recorded_failures").reason)
+        self.assertIn("non-fatal", by_name(result, "recorded_failures").reason)
 
     def test_valid_full_session_with_resources_passes(self):
         session = build_session(
