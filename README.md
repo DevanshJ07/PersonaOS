@@ -141,7 +141,7 @@ python scripts\verify_artifacts.py outputs\telemetry\<session_id> --config confi
 | `session_identifiers` | Folder name, summary `session_id`, controller `run_id` and `session_start` id all match |
 | `session_start_end` | Both events are present |
 | `timestamps_and_duration` | Timestamps parse, `t` never goes backwards, the durations agree; a **full** run must last ≥ max(900 s, target) |
-| `browser_artifacts`, `browser_navigation` | `cycle_*_browser\browser_session.json` parses; ≥ 2 sites visited, ≥ `minimum_links_per_session` links, browser closed, no errors |
+| `browser_artifacts`, `browser_navigation` | `cycle_*_browser\browser_session.json` parses; ≥ 2 sites visited, ≥ `minimum_links_per_session` links, browser closed. Quota or `success=false` failures FAIL; advisory notes on a successful session (`focus_lost`, `close_failed`, and similar) WARN |
 | `office_artifacts`, `odt_document` | A nonempty `.odt` named `Weekly_Project_Report.odt` (or `_NNN.odt`) exists, is a ZIP with the OpenDocument text `mimetype` and a readable `content.xml` with a text body. If only a `.docx` is found, the failure says it is the wrong format |
 | `resource_metrics` | `resource_samples.csv` columns and numeric values when sampling ran; WARN if psutil was unavailable or a smoke run ended before the first sample |
 | `evaluation_present`, `evaluator_result` | The evaluator report has a score, a pass flag and checks, agrees with the controller, and passed |
@@ -178,5 +178,5 @@ Use `python -m pytest`, not bare `pytest`: the `-m` form puts the repo root on `
 - Keyboard input is ordinary Windows `SendInput`. It is synthetic and detectable, and it does not emulate a physical device.
 - The collector records only the agent's own actions, never keystrokes or typed text.
 - The evaluator score is a readiness heuristic. Passing it doesn't show that the session can't be told apart from a human.
-- The evaluator's Sysmon filter (`SYSMON_IMAGES` in `telemetry/evaluator.py`) does not yet include `soffice.exe` / `soffice.bin`, so `--sysmon` output can leave out Writer even when the log has it. Collect the Writer process chain manually until that is updated.
+- The evaluator's Sysmon filter (`SYSMON_IMAGES` in `telemetry/evaluator.py`) includes `soffice.exe` and `soffice.bin` as well as browser and Python images. `--sysmon` still needs Sysmon installed and an elevated prompt; until then, collect the Writer process chain with Process Explorer.
 - Windows only for live runs: it needs Apache OpenOffice Writer, Edge or Chrome, and an interactive desktop. The browser follows links by searching for visible link text, so heavily changed sites may need `browser.link_texts` overrides.

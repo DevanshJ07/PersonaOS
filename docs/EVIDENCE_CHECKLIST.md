@@ -46,7 +46,7 @@ What the scoring looks for: a visible desktop workflow whose process tree looks 
 
 - The evaluator score is a team heuristic, not process authenticity.
 - CPU samples of `python.exe` do not prove Writer or Chrome parentage.
-- `SYSMON_IMAGES` in `telemetry/evaluator.py` still lists `winword.exe` and not `soffice.bin`. Until that is updated *and* Sysmon is installed, Sysmon output may omit Writer even if the log exists. Missing Writer images are **unavailable**, not a pass.
+- `SYSMON_IMAGES` in `telemetry/evaluator.py` includes `soffice.exe` and `soffice.bin`. Until Sysmon is installed, `--sysmon` output is still **unavailable**, not a pass.
 
 ---
 

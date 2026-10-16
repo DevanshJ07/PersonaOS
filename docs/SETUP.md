@@ -179,7 +179,7 @@ python -m telemetry.evaluator outputs\telemetry\<session_id>
 python -m telemetry.evaluator outputs\telemetry\<session_id> --sysmon
 ```
 
-With no session argument, the evaluator picks the latest session under `telemetry.output_directory` in the config, which is the same folder `main.py` writes to by default. It writes `evaluation_report.json` and `evaluation_report.md` into the session folder and exits `0` only if every check passes. `--sysmon` needs Sysmon installed (step 8) and an **elevated** Command Prompt; if the log can't be read, the report says why. The evaluator's Sysmon filter does not yet list `soffice.exe`, so capture the Writer process chain with Process Explorer as well.
+With no session argument, the evaluator picks the latest session under `telemetry.output_directory` in the config, which is the same folder `main.py` writes to by default. It writes `evaluation_report.json` and `evaluation_report.md` into the session folder and exits `0` only if every check passes. `--sysmon` needs Sysmon installed (step 8) and an **elevated** Command Prompt; if the log can't be read, the report says why. The filter keeps Writer (`soffice.exe`/`soffice.bin`) as well as browser and Python images. Capture the Writer process chain with Process Explorer as well until Sysmon is available.
 
 Keep the session folder unedited. What to collect for each scoring category is in [EVIDENCE_CHECKLIST.md](EVIDENCE_CHECKLIST.md); record each result (including FAIL and BLOCKED) in [VM_TEST_RESULTS.md](VM_TEST_RESULTS.md). The evaluator's checks are described in [TELEMETRY.md](TELEMETRY.md).
 

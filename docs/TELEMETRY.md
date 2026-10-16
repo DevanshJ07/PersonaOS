@@ -77,7 +77,7 @@ def run_session(config: dict) -> None:
 
 Requirements on other modules (for the integrator to pass on):
 
-- **Office (Member 1):** `TaskResult.artifacts` must contain the absolute path of the saved `.docx`. Its file name must equal `office.document_name` (or end with `_<document_name>`). Otherwise `office_document_created` fails.
+- **Office (Member 1):** `TaskResult.artifacts` must contain the absolute path of the saved `.odt`. Its file name must equal `office.document_name` (or end with `_<document_name>`). Otherwise `office_document_created` fails.
 - **Browser (Member 2):** already lists `browser_session.json` (with `links_followed` and `sites_visited`) in `TaskResult.artifacts`. If that path moves, the evaluator also looks in the session folder, its parent and its grandparent, plus their immediate subfolders.
 - **Behaviour (Member 3):** nothing to do. The wrapper times `pause(action)` and `type_text(text)` and forwards every other attribute.
 
@@ -127,7 +127,7 @@ python -m telemetry.evaluator outputs\telemetry\<session_id> --config config\set
 python -m telemetry.evaluator --sysmon
 ```
 
-`--sysmon` uses `wevtutil qe` read-only. It keeps only Word, Excel, Outlook, browser and Python images within ±60 s of the session, capped at 500 events. If the log can't be read (not elevated, or Sysmon missing), the report says why and contains no values; collect the evidence manually instead (see the checklist below).
+`--sysmon` uses `wevtutil qe` read-only. It keeps only Writer (`soffice.exe`/`soffice.bin`), Excel, Outlook, browser and Python images within ±60 s of the session, capped at 500 events. If the log can't be read (not elevated, or Sysmon missing), the report says why and contains no values; collect the evidence manually instead (see the checklist below).
 
 ## VM setup (Hack23)
 
@@ -156,7 +156,7 @@ Never put the VPN, Proxmox or SMB password, or the OTP secret, into code, logs, 
 - `pyautogui` and its dependencies as Windows wheels: `pymsgbox`, `pytweening`, `pyscreeze`, `mouseinfo`, `pyperclip`, `pyrect`, `pillow`
 - `pygetwindow` (and `pyrect`)
 - `psutil` (win_amd64 wheel matching the Python version)
-- Optional: `python-docx` and `lxml`, for verifying the saved report; Sysinternals Suite, if Process Explorer/Monitor are not already on the VM
+- Optional: Sysinternals Suite, if Process Explorer/Monitor are not already on the VM. The saved `.odt` is verified with the standard library (`zipfile` + `xml`), not `python-docx`.
 
 ### Evidence checklist (manual, real VM, redact credentials)
 
@@ -164,9 +164,9 @@ Never put the VPN, Proxmox or SMB password, or the OTP secret, into code, logs, 
 - [ ] Snapshot name and release SHA-256
 - [ ] Mock-site test (`--sites`) after installing the root CA
 - [ ] SMB transfer verified
-- [ ] Event Viewer → Applications and Services Logs → Microsoft → Windows → Sysmon → Operational, filtered on Event ID 1: `Image`, `ParentImage`, `CommandLine`, `ParentCommandLine`, `UtcTime` for the browser, Word and Python
+- [ ] Event Viewer → Applications and Services Logs → Microsoft → Windows → Sysmon → Operational, filtered on Event ID 1: `Image`, `ParentImage`, `CommandLine`, `ParentCommandLine`, `UtcTime` for the browser, Writer (`soffice.exe`/`soffice.bin`) and Python
 - [ ] Process Explorer tree screenshot during the run
 - [ ] Process Monitor capture filtered to the demo processes (keep it short, so it doesn't fill the disk)
 - [ ] Proxmox Summary CPU/RAM graphs covering the run
 - [ ] `evaluation_report.md` from the full run
-- [ ] A human-operated comparison run (browser and Word launched by hand) with its process chain, reported next to the agent run without changing either. Human timing data belongs to Member 3's baseline work; this item covers only the process evidence.
+- [ ] A human-operated comparison run (browser and Writer launched by hand) with its process chain, reported next to the agent run without changing either. Human timing data belongs to Member 3's baseline work; this item covers only the process evidence.
