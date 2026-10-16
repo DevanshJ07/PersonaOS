@@ -461,6 +461,33 @@ SYSMON_XML = """
 <Data Name='ParentImage'>C:\\Windows\\explorer.exe</Data></EventData></Event>
 """
 
+SYSMON_XML_WRITER = """
+<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System><EventID>1</EventID></System>
+<EventData><Data Name='UtcTime'>2026-10-11 10:00:01.000</Data><Data Name='ProcessId'>4242</Data>
+<Data Name='Image'>C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe</Data>
+<Data Name='CommandLine'>chrome.exe</Data><Data Name='ParentProcessId'>1200</Data>
+<Data Name='ParentImage'>C:\\Windows\\explorer.exe</Data><Data Name='ParentCommandLine'>explorer.exe</Data>
+</EventData></Event>
+<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System><EventID>1</EventID></System>
+<EventData><Data Name='UtcTime'>2026-10-11 10:00:02.000</Data><Data Name='ProcessId'>5100</Data>
+<Data Name='Image'>C:\\Program Files\\OpenOffice 4\\program\\soffice.exe</Data>
+<Data Name='CommandLine'>"C:\\Program Files\\OpenOffice 4\\program\\soffice.exe" -writer</Data>
+<Data Name='ParentProcessId'>1200</Data>
+<Data Name='ParentImage'>C:\\Windows\\explorer.exe</Data><Data Name='ParentCommandLine'>explorer.exe</Data>
+</EventData></Event>
+<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System><EventID>1</EventID></System>
+<EventData><Data Name='UtcTime'>2026-10-11 10:00:02.100</Data><Data Name='ProcessId'>5101</Data>
+<Data Name='Image'>C:\\Program Files\\OpenOffice 4\\program\\soffice.bin</Data>
+<Data Name='CommandLine'>"C:\\Program Files\\OpenOffice 4\\program\\soffice.bin" -writer</Data>
+<Data Name='ParentProcessId'>5100</Data>
+<Data Name='ParentImage'>C:\\Program Files\\OpenOffice 4\\program\\soffice.exe</Data>
+<Data Name='ParentCommandLine'>"C:\\Program Files\\OpenOffice 4\\program\\soffice.exe" -writer</Data>
+</EventData></Event>
+<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System><EventID>1</EventID></System>
+<EventData><Data Name='Image'>C:\\Windows\\System32\\notepad.exe</Data>
+<Data Name='ParentImage'>C:\\Windows\\explorer.exe</Data></EventData></Event>
+"""
+
 
 class SysmonTests(unittest.TestCase):
     def test_parse_filters_images_and_summarises_lineage(self):
@@ -468,6 +495,25 @@ class SysmonTests(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["ProcessId"], "4242")
         self.assertEqual(evaluator.summarise_lineage(records), {"explorer.exe -> chrome.exe": 1})
+
+    def test_sysmon_images_keep_existing_names_and_openoffice_writer(self):
+        self.assertTrue(
+            {"winword.exe", "excel.exe", "outlook.exe",
+             "chrome.exe", "msedge.exe", "firefox.exe",
+             "python.exe", "pythonw.exe", "py.exe",
+             "soffice.exe", "soffice.bin"}.issubset(evaluator.SYSMON_IMAGES)
+        )
+
+    def test_parse_keeps_openoffice_writer_and_drops_unrelated(self):
+        records = evaluator.parse_sysmon_events(SYSMON_XML_WRITER)
+        images = [evaluator._basename(r["Image"]) for r in records]
+        self.assertEqual(images, ["chrome.exe", "soffice.exe", "soffice.bin"])
+        self.assertNotIn("notepad.exe", images)
+        self.assertEqual(evaluator.summarise_lineage(records), {
+            "explorer.exe -> chrome.exe": 1,
+            "explorer.exe -> soffice.exe": 1,
+            "soffice.exe -> soffice.bin": 1,
+        })
 
     def test_non_windows_reports_gap(self):
         start = evaluator.parse_utc("2026-10-11T10:00:00.000Z")

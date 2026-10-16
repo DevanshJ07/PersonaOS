@@ -66,6 +66,7 @@ SYSMON_FIELDS = ("UtcTime", "ProcessId", "Image", "CommandLine",
 # Only processes relevant to the demo; avoids recording unrelated user activity.
 SYSMON_IMAGES = {
     "winword.exe", "excel.exe", "outlook.exe",
+    "soffice.exe", "soffice.bin",
     "chrome.exe", "msedge.exe", "firefox.exe",
     "python.exe", "pythonw.exe", "py.exe",
 }
@@ -484,7 +485,7 @@ def _render_markdown(ev):
         "- Timing metrics come from the agent's own event log, not from Windows kernel or Sysmon telemetry.",
         "- Thresholds are team heuristics (Workshop 2 suggested pause CV > 0.4); passing them does not "
         "show the run is indistinguishable from a human.",
-        "- CPU/RAM cover the agent process and its children only; Word and the browser are separate processes. "
+        "- CPU/RAM cover the agent process and its children only; Writer and the browser are separate processes. "
         "Use Process Explorer or the Proxmox Summary tab for those.",
         "",
     ]
